@@ -37,11 +37,16 @@ class GenBot
     @have_talked = {}
     @tweet_mutex = Mutex.new
     @last_scheduled = :none
+    @ignore_schedule = false
 
     bot.consumer_key = CONSUMER_KEY
     bot.consumer_secret = CONSUMER_SECRET
 
     bot.on_startup do
+      @ignore_schedule = ARGV.include?"--ignore-schedule"
+      if @ignore_schedule
+          @bot.log "Will ignore the schedule."
+      end
       @content = Content.new(@bot)
       @special_tokens, @interesting_tokens, @cool_tokens = @content.get_tokens()
       hw = @content.hello_world(MAX_TWEET_LENGTH)
@@ -255,6 +260,11 @@ class GenBot
     end
 
     bot.scheduler.every '1m' do
+        if !@ignore_schedule && !should_it_be_on()
+            @bot.log "Bot process caught running off allowed time. Exit."
+            @bot.log 'If you are just testing the bot use "ruby run.rb --ignore-schedule"'
+            abort
+        end
         gm = Time.new.gmtime 
         h = gm.hour  
         m = gm.min    
