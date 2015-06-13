@@ -9,8 +9,15 @@ INITIAL_SEED = 1777290
 
 PICTURE_LINK_LENGTH = 23
 
+# The bot is setup to have a chance to cc some bots that process images. You
+# can tweak which accounts to send the images to (If you do this to humans that
+# is likely going to classify your bot as spam. You don't want that).
+#
+# Put AT_PROB = 0.0  to disable this feature. 
+
 AT_PROB = 1.0 / 10.0
 
+# List of users it might send pictures to:
 AT_USERS = [
     "Lowpolybot",
     "cgagraphics",
@@ -19,8 +26,8 @@ AT_USERS = [
     "a_quilt_bot",
     "JPGglitchbot",
 ]
+# A small text to add before the @user:
 AT_USER_ADD = ". cc "
-
 
 # tweak the PICS constant, with initial seed: 
 PICS.sort!
