@@ -1,57 +1,27 @@
+# twitter-image-bot
+
+This is a twitter bot that just periodically posts random pictures from a preset list.
+
+This is basically the source code for [@LegoSpaceBot](https://twitter.com/LegoSpaceBot) but without the set pictures. Enjoy the placeholder letter pictures.
+
 # twitter-bot-template
-A ruby twitter bot template.
 
-# Basic instructions
-Actual documentation in the form of a tutorial coming soon, I hope.  In the meantime this repository should be of interest
-to people already knowledgeable about twitter bots.
+This is based on another project: [The twitter-bot-template](https://github.com/vexorian/twitter-bot-template). Most of the twitter-related work is done by that. In fact, the only difference between this project and the twitter-bot-template is in content.rb and the provided images.
 
-Required twitter_ebooks version is locked at 2.3.2, 3.0+ support will come soon (tm).
+# Picking a random image
 
-# Heroku scheduling
-Soon apps hosted for free in Heroku will be limited to run 18 hours a day. If a bot
-hosted in heroku has no awareness of this, Heroku will put it to sleep at unpredictable 
-times of the day. This bot template offers a workaround to this issue. You know
-have the freedom to schedule at which hours the bot should go to sleep.
+This project turned out to be notably non-trivial. The simple idea of just picking a random image from the list and posting it had an issue: If you pick N random numbers from a set that is not very large, there will most likely be many repetitions. [The birthday paradox](https://en.wikipedia.org/wiki/Birthday_problem) teaches us that with a set of 365 numbers (which is about 1.5 times larger than the number of available pictures for LegoSpaceBot), even in a sample as small as 23 people, the probability that some will share the picked numbers is 50%. Merely picking a random picture for each tweet would give the impression there are many repeated images.
 
-Assuming you know how to setup a bot to run in Heroku, go to the dashboard, find the
-bot's app and in the addons section add "Heroku Scheduler" , press save.
+The solution couldn't be to just use a database to keep track of which images were recently added - It would require extra resources for what is just a silly bot. Instead, the twitter account's tweet count is used as state. The tweet count is used as the index for the next image.
 
-Then click on Heroku Scheduler, a new page will open. Click "Add Job" to add a
-schedulable job. Type "ruby scheduler.rb" in the command. Select hourly at 00 minutes. You
-may also try with every 10 minutes, but it might be overkill.
+Then we also need a way to convert index into a picked image. Once the bot runs out of pictures, it needs to start all over again, but with a different order of pictures. This introduces new issues. The first one is how can you keep multiple orders when all we have to identify the next picture is its index? The answer to this was to divide the index i / N and round it down. With this we can identify which number of random permutation it is. What the bot does is to determine a random seed for the shuffle using i / N as base.
 
-Control of the app's Heroku processes requires a Heroku api token (similar to twitter API tokens).
+The second issue is that if we do this and always shuffle the sequence, there are still chances of repetitions. For example, we have two consecutive permutations and because of luck the last image in one is exactly the first image in the second one. This results in the bot having duplicates. To fix this, it actually splits the image list in two random halves and alternates what half to use depending on (i / N) / 2- This way we can guarantee a minimum N/2 distance between  two repeated pictures but without sacrificing the sensation of randomness.
 
-# credentials.rb
-This file declares the twitter and heroku tokens. See the included example.credentials.rb file for more information.
-
-# botconfig.rb
-This sets a lot of variables, some are important (like who is the owner, what is the bot's name). How often to tweet. Etc.
-
-# content.rb
-The source of behavior for the bot. What tweets to make, how to reply. Support for custom commands...
-
-# bots.rb
-The core. All my twitter bots use the same bots.rb , config and content are the ones that make the difference. Note that this is really my first Ruby project so it could be bette.
+Find the relevant source in content.rb.
 
 
-# maintenance.rb
-Because there's a scheduler process constantly turning the bot on and off, we need something to completely disable
-execution of a bot in case we need to update it / do tests / no longer want heroku running it / etc.
 
-A script you can run to enable or disable heroku's execution of your bot.
-ruby maintenance.rb off , makes it run (unless the bot is scheduled not to run at the time)
-ruby maintenance.rb on  , disables execution until we call it with 'off'.
 
-# scheduler.rb
-This is the part that might interest bot makers. Using the heroku API to send a bot to sleep or wake it up. The sleep times are
-configured in botconfig.rb
 
-# Other interesting features
-* Tweet throtling , by default the minimum DELAY  is 30 seconds, meaning that the bot will make at most 2 tweets per minute regardless of circumstances.
-* Depending of how you set up content, the bot can post images and tweet chains with/without images.
-* Autofollow back : Instead of automatically following back anyone who follows, it follows back anyone who follows AND seems to interact with the bot.
-* Auto unfollow back : If someone unfollows the bot, the bot will eventually find out and unfollow (you can setup exceptions)
-* Commands : BOT_OWNER can send commands through DM and make the bot do things, see bots.rb for more info. Specially useful so you don't have to login as the bot to do simple things like following friends or blocking spamming.
-* Schedulable tweets: Hard to explain but there's a way to setup schedulable tweets in botconfig.rb and then maybe make content.rb say special things in that case. 
-This is how [@bmpbug's #on/#off messages](https://twitter.com/search?q=from%3Abmpbug%20%23on%20OR%20%23off&src=typd) work.
+
