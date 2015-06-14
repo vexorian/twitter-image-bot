@@ -37,16 +37,9 @@ class GenBot
     @have_talked = {}
     @tweet_mutex = Mutex.new
     @last_scheduled = :none
-    @ignore_schedule = false
-
-    bot.consumer_key = CONSUMER_KEY
-    bot.consumer_secret = CONSUMER_SECRET
+    @ignore_schedule = defined?IGNORE_SCHEDULE
 
     bot.on_startup do
-      @ignore_schedule = ARGV.include?"--ignore-schedule"
-      if @ignore_schedule
-          @bot.log "Will ignore the schedule."
-      end
       @content = Content.new(@bot)
       @special_tokens, @interesting_tokens, @cool_tokens = @content.get_tokens()
       hw = @content.hello_world(MAX_TWEET_LENGTH)
@@ -59,7 +52,6 @@ class GenBot
       end
       @last_tweeted = minutes_since_last_tweet(@bot.twitter.user.id)
       @bot.log "#{@last_tweeted.to_s} minutes since latest tweet."
-
     end
 
     bot.on_message do |dm|
@@ -263,7 +255,7 @@ class GenBot
         if !@ignore_schedule && !should_it_be_on()
             @bot.log "Bot process caught running off allowed time. Exit."
             @bot.log 'If you are just testing the bot use "ruby run.rb --ignore-schedule"'
-            abort
+            exit
         end
         gm = Time.new.gmtime 
         h = gm.hour  
@@ -563,13 +555,10 @@ class GenBot
   end
 end
 
-def make_bot(bot)
-  GenBot.new(bot)
-end
-
 Ebooks::Bot.new(TWITTER_USERNAME) do |bot|
   bot.oauth_token = OAUTH_TOKEN
   bot.oauth_token_secret = OAUTH_TOKEN_SECRET
-
-  make_bot(bot)
+  bot.consumer_key = CONSUMER_KEY
+  bot.consumer_secret = CONSUMER_SECRET
+  GenBot.new(bot)
 end
