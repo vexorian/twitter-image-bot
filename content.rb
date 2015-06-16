@@ -1,5 +1,4 @@
 # encoding: UTF-8
-require 'twitter_ebooks'
 
 def random_number
     # twitter gets angry at you if you post the exact same tweet multiple times
