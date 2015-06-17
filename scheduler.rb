@@ -24,7 +24,9 @@ else
     puts "Current scale is already " + current.to_s + ", nothing to change."
 end
 
-if wanted == 1
+if (wanted == 1) && (current == 1)
+    # Make sure the process is up. It's possible it crashed and Heroku made it
+    # go to sleep.
     bad = true
     begin
         heroku.dyno.list(HEROKU_APP_NAME).each do |x|
