@@ -394,7 +394,7 @@ class GenBot < Ebooks::Bot
                       elsif last_tweet_id == 0
                           last_tweet = @bot.tweet(text)
                       else
-                          last_tweet = @bot.reply( last_tweet, text )
+                          last_tweet = twitter.update(text, {in_reply_to_status_id: last_tweet_id})
                       end
                   rescue => e
                       @bot.log(e.message)
