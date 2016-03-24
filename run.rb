@@ -16,8 +16,36 @@ end
 
 require_relative 'bots'
 
-EM.run do
- Ebooks::Bot.all.each do |bot|
-    bot.start
+
+require 'twitter_ebooks'
+# Taken from twitter-ebooks : Temporary measure while migrating to twitter-ebooks 3.0
+#require 'ostruct'
+#require 'fileutils'
+
+
+bots = Ebooks::Bot.all
+
+threads = []
+bots.each do |bot|
+  threads << Thread.new { bot.prepare }
+end
+threads.each(&:join)
+
+threads = []
+bots.each do |bot|
+  threads << Thread.new do
+    loop do
+      begin
+        bot.start
+      rescue Exception => e
+        bot.log e.inspect
+        puts e.backtrace.map { |s| "\t"+s }.join("\n")
+      end
+      bot.log "Sleeping before reconnect"
+      sleep 60
+    end
   end
 end
+threads.each(&:join)
+
+

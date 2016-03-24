@@ -24,42 +24,98 @@ AT_BLACKLIST = BLACKLIST.map{ |s| "@" + s }
 
 IN_NEVER_UNFOLLOW_BACK = NEVER_UNFOLLOW_BACK.map{ |s| s.downcase }.to_set
 
-class GenBot
-  
-  def initialize(bot)
-    @bot = bot
-    @content = nil
-    @last_tweeted = 0
-    @last_reset = 0
-    @in_reply_queue = {}
-    @follow_back_check = {}
-    @unfollow_back_check = {}
-    @have_talked = {}
-    @tweet_mutex = Mutex.new
-    @last_scheduled = :none
-    @ignore_schedule = defined?IGNORE_SCHEDULE
+class GenBot < Ebooks::Bot
+  # Configuration here applies to all GenBots
+  def configure
+    # Users to block instead of interacting with
+    self.blacklist = ['tnietzschequote']
 
-    bot.on_startup do
-      @content = Content.new(@bot)
-      @special_tokens, @interesting_tokens, @cool_tokens = @content.get_tokens()
-      hw = @content.hello_world(MAX_TWEET_LENGTH)
-      if hw != nil
+    # Range in seconds to randomize delay when bot.delay is called
+    self.delay_range = DELAY
+  end
+
+  def on_startup
+        @bot = self
+        @content = nil
+        @last_tweeted = 0
+        @last_reset = 0
+        @in_reply_queue = {}
+        @follow_back_check = {}
+        @unfollow_back_check = {}
+        @have_talked = {}
+        @tweet_mutex = Mutex.new
+        @last_scheduled = :none
+        @ignore_schedule = defined?IGNORE_SCHEDULE
+      
+        @content = Content.new(@bot)
+        @special_tokens, @interesting_tokens, @cool_tokens = @content.get_tokens()
+        hw = @content.hello_world(MAX_TWEET_LENGTH)
+        if hw != nil
           begin      
               @bot.twitter.direct_message_create( BOT_OWNER, hw  )
           rescue
               @bot.log "Unable to send DM to bot owner: #{BOT_OWNER}.\n"
           end
-      end
-      @last_tweeted = minutes_since_last_tweet(@bot.twitter.user.id)
-      @bot.log "#{@last_tweeted.to_s} minutes since latest tweet."
-    end
+        end
+        @last_tweeted = minutes_since_last_tweet(@bot.twitter.user.id)
+        @bot.log "#{@last_tweeted.to_s} minutes since latest tweet."
+        
+        
+        scheduler.every '1m' do
+            if !@ignore_schedule && !should_it_be_on()
+                @bot.log "Bot process caught running off allowed time. Exit."
+                @bot.log 'If you are just testing the bot use "ruby run.rb --ignore-schedule"'
+                exit
+            end
+            gm = Time.new.gmtime 
+            h = gm.hour  
+            m = gm.min    
+            special = :none
+            SPECIAL_MESSAGES_SCHEDULE.each do |item|
+                hc, mc, val = item
+                if hc == h
+                    if mc.is_a? Range
+                        if mc.include? m
+                            special = val
+                        end
+                    else
+                        if mc == m
+                            special = val
+                        end
+                    end
+                end
+            end
+            disable_special = false
+            if (@last_scheduled != :none) && (@last_scheduled == special)
+                disable_special = true
+            end
+            @last_scheduled = special
+            @tweet_mutex.synchronize do
+                @last_tweeted = @last_tweeted + 1
+                if ( (special != :none) && ! disable_special) || (@last_tweeted >= MAX_TWEET_PERIOD) || ( (@last_tweeted >= MIN_TWEET_PERIOD) && (rand < TWEET_RATE) )
+                    if disable_special
+                        do_tweet_chain(:none)
+                    else
+                        do_tweet_chain(special)
+                    end
+                end
+            end
+            @last_reset = @last_reset + 1
+            if (@last_reset > MAX_RESET_PERIOD) && (rand < RESET_RATE)
+                 @last_reset = 0
+                 @have_talked = {}
+                 @follow_back_check = {}
+                 @unfollow_back_check = {}
+            end
+        end
+  end
 
-    bot.on_message do |dm|
-      if (dm[:sender][:screen_name] == BOT_OWNER) && (dm[:text].start_with?"!")
-          if dm[:text].start_with?"!tweet"
+  def on_message(dm)
+      if (dm.sender.screen_name == BOT_OWNER) && (dm.text.start_with?"!")
+          if dm.text.start_with?"!tweet"
               @last_tweeted = MAX_TWEET_PERIOD + 1
           end
-          s = dm[:text].split(" ")
+          s = dm.text.split(" ")
           if s.size > 1
               # These commands exist because there are legitimate use cases for
               # them. If you use these commands to break ToS, expect the app
@@ -92,94 +148,99 @@ class GenBot
               end
           end
           # content class can have commands of its own too 
-          s = @content.command(dm[:text])
+          s = @content.command(dm.text)
           if s != nil
               bot.reply dm, s
           end
       else
-          bot.delay DELAY do
-              text = @content.dm_response(dm[:sender], dm[:text], MAX_TWEET_LENGTH)
+          @bot.delay DELAY do
+              text = @content.dm_response(dm.sender, dm.text, MAX_TWEET_LENGTH)
               if text == nil
                   @bot.log "Content returned no response for DM."
               else
-                  bot.reply dm, text
+                  @bot.reply dm, text
               end
           end
       end
-    end
 
+  end
+
+  def on_follow(user)
     if AUTO_FOLLOW_BACK
-        bot.on_follow do |user|
-          bot.delay DELAY do
-              bot.follow user[:screen_name]
-          end
-        end
+       @bot.delay DELAY do
+           @bot.follow user.screen_name
+       end
     end
+  end
 
-    if (REPLY_MODE != :disable_replies) || (REPLY_FOLLOW_BACK)  
-        bot.on_mention do |tweet, meta|
-          uname = tweet[:user][:screen_name]
+  def on_mention(tweet)
+    # Reply to a mention
+    # reply(tweet, meta(tweet).reply_prefix + "oh hullo")
+    if (REPLY_MODE == :disable_replies) && ! REPLY_FOLLOW_BACK
+        return
+    end
+          uname = tweet.user.screen_name
           
           
-          tokens = NLP.tokenize(tweet[:text])
-          next if tokens.find_all { |t| BLACKLIST.include?(t.downcase) || AT_BLACKLIST.include?(t.downcase)}.length > 0
-          next if BLACKLIST.include?(uname.downcase)
+          tokens = NLP.tokenize(tweet.text)
+          return if tokens.find_all { |t| BLACKLIST.include?(t.downcase) || AT_BLACKLIST.include?(t.downcase)}.length > 0
+          return if BLACKLIST.include?(uname.downcase)
           
           if REPLY_FOLLOW_BACK
               # follow-back maybe
               if ! @follow_back_check[uname] then
                   @follow_back_check[uname] = true
-                  if @bot.twitter.friendship?(tweet[:user], TWITTER_USERNAME) && ! @bot.twitter.friendship?(TWITTER_USERNAME, tweet[:user])
+                  if @bot.twitter.friendship?(tweet.user, TWITTER_USERNAME) && ! @bot.twitter.friendship?(TWITTER_USERNAME, tweet.user)
                       @bot.delay DELAY do
                           @bot.log 'Follow-back: ' + uname + "\n"
-                          @bot.twitter.follow tweet[:user]
+                          @bot.twitter.follow tweet.user
                       end
                       # force a reply so that when somebody is followed-back this way
                       # it is easier for owner to notice
                       if REPLY_MODE != :disable_replies
-                          reply_queue(tweet, meta)
+                          reply_queue(tweet, meta(tweet))
                       end
-                      next
+                      return
                   end
               end
           end
           
           if REPLY_MODE == :disable_replies
-              next
+              return
           end
     
           # Avoid infinite reply chains even with bots that cannot be 
           # identified as such
           if rand < CHANCE_TO_IGNORE_MENTION
               @bot.log 'Ignored mention'
-              next
+              return
           end
     
           # Avoid infinite reply chains (30% chance not to reply other bots)
           if is_it_a_bot_name(uname) && (rand < CHANCE_TO_IGNORE_BOT_MENTION)
               @bot.log 'Ignored bot mention'
-              next              
+              return              
           end
     
-          reply_queue(tweet, meta)
-        end
-    end
+          reply_queue(tweet, meta(tweet))
+    
+  end
 
-    bot.on_timeline do |tweet, meta|
-      next if tweet[:retweeted_status] || tweet[:text].start_with?('RT')
-      uname = tweet[:user][:screen_name]
-      next if BLACKLIST.include?(uname.downcase)
+  def on_timeline(tweet)
+      return if tweet.retweeted_status || tweet.text.start_with?('RT')
+      uname = tweet.user.screen_name
+      return if BLACKLIST.include?(uname.downcase)
       
       if AUTO_UNFOLLOW_BACK
           if ! @unfollow_back_check[uname]
               @bot.log "Follow back check: @" + uname
               @unfollow_back_check[uname] = true
-              if !@bot.twitter.friendship?(tweet[:user], TWITTER_USERNAME)
+              if !@bot.twitter.friendship?(tweet.user, TWITTER_USERNAME)
                   # doesn't follow back, wtf is the user doing in this timeline?
                   if ! (IN_NEVER_UNFOLLOW_BACK.include?uname.downcase)
                       @bot.log "Unfollow"
                       unfollow uname
-                      next # so the bot doesn't bother interacting
+                      return # so the bot doesn't bother interacting
                   else
                       @bot.log "User is in NEVER_UNFOLLOW_BACK"
                   end
@@ -194,9 +255,9 @@ class GenBot
           bot.delay DELAY do
               bot.reply tweet, s
           end
-          next
+          return
       end
-      tokens = NLP.tokenize(tweet[:text])
+      tokens = NLP.tokenize(tweet.text)
       # We calculate unprompted interaction probability by how well a
       # tweet matches our keywords
       interesting = tokens.find_all { |t| @interesting_tokens.include?(t.downcase) }.length >= INTERESTING_NEEDED
@@ -220,14 +281,14 @@ class GenBot
           do_reply = (rand < INTERESTING_REPLY_RATE)
           do_rt    = (rand < INTERESTING_RT_RATE)
       end
-      if (tweet[:text].count "@") > 0
+      if (tweet.text.count "@") > 0
           do_reply = false
           do_rt = false
       end
       
-      isBot = is_it_a_bot_name(tweet[:user][:screen_name])
+      isBot = is_it_a_bot_name(tweet.user.screen_name)
       if ONLY_REPLY_RT_BOTS
-          if (tweet[:user][:screen_name] != BOT_OWNER) &&  ! isBot
+          if (tweet.user.screen_name != BOT_OWNER) &&  ! isBot
               do_reply = false
               do_rt = false
           end
@@ -235,7 +296,7 @@ class GenBot
       
       # Any given user will receive at most one random interaction per day
       # (barring special cases)
-      if !@have_talked[tweet[:user][:screen_name]]
+      if !@have_talked[tweet.user.screen_name]
           if do_fave
               favorite(tweet)
           end
@@ -246,59 +307,18 @@ class GenBot
               reply_queue(tweet, meta)
           end
           if do_rt || do_reply
-              @have_talked[tweet[:user][:screen_name]] = true
+              @have_talked[tweet.user.screen_name] = true
           end
       end
-    end
 
-    bot.scheduler.every '1m' do
-        if !@ignore_schedule && !should_it_be_on()
-            @bot.log "Bot process caught running off allowed time. Exit."
-            @bot.log 'If you are just testing the bot use "ruby run.rb --ignore-schedule"'
-            exit
-        end
-        gm = Time.new.gmtime 
-        h = gm.hour  
-        m = gm.min    
-        special = :none
-        SPECIAL_MESSAGES_SCHEDULE.each do |item|
-            hc, mc, val = item
-            if hc == h
-                if mc.is_a? Range
-                    if mc.include? m
-                        special = val
-                    end
-                else
-                    if mc == m
-                        special = val
-                    end
-                end
-            end
-        end
-        disable_special = false
-        if (@last_scheduled != :none) && (@last_scheduled == special)
-            disable_special = true
-        end
-        @last_scheduled = special
-        @tweet_mutex.synchronize do
-            @last_tweeted = @last_tweeted + 1
-            if ( (special != :none) && ! disable_special) || (@last_tweeted >= MAX_TWEET_PERIOD) || ( (@last_tweeted >= MIN_TWEET_PERIOD) && (rand < TWEET_RATE) )
-                if disable_special
-                    do_tweet_chain(:none)
-                else
-                    do_tweet_chain(special)
-                end
-            end
-        end
-        @last_reset = @last_reset + 1
-        if (@last_reset > MAX_RESET_PERIOD) && (rand < RESET_RATE)
-             @last_reset = 0
-             @have_talked = {}
-             @follow_back_check = {}
-             @unfollow_back_check = {}
-        end
-    end
-    
+  end
+
+  def on_favorite(user, tweet)
+    # Do nothing
+  end
+
+  def on_retweet(tweet)
+    # Do nothing
   end
   
   # return 0 on failure
@@ -396,38 +416,38 @@ class GenBot
   end
 
   def reply_queue(tweet, meta)
-    if @in_reply_queue[ tweet[:user][:screen_name].downcase ]
-        @bot.log "@" + tweet[:user][:screen_name] + " is already in reply queue, ignoring new mention."
+    if @in_reply_queue[ tweet.user.screen_name.downcase ]
+        @bot.log "@" + tweet.user.screen_name + " is already in reply queue, ignoring new mention."
         return
     end
-    @in_reply_queue[ tweet[:user][:screen_name].downcase ] = true
-    @bot.log "Add @" + tweet[:user][:screen_name] + " to reply queue."
+    @in_reply_queue[ tweet.user.screen_name.downcase ] = true
+    @bot.log "Add @" + tweet.user.screen_name + " to reply queue."
     if REPLY_MODE == :reply_to_single
         # always @ only the person who @-ed the bot:
-        if tweet[:user][:screen_name] == TWITTER_USERNAME
+        if tweet.user.screen_name == TWITTER_USERNAME
             rp = ''
         else
-            rp = '@' + tweet[:user][:screen_name] + ' '
+            rp = '@' + tweet.user.screen_name + ' '
         end
     else
         rp = ''
-        for s in meta[:reply_prefix].split(" ")
+        for s in meta.reply_prefix.split(" ")
             if rp == ''
                 rp = s + " "
             elsif ! is_it_a_bot_name(s)
                 rp = rp + s + " "
             end
         end
-        if (tweet[:text].count "@") > 4
+        if (tweet.text.count "@") > 4
             # too many @-s probably a user trying to exploit bots
-            rp = '@' + tweet[:user][:screen_name] + ' '
+            rp = '@' + tweet.user.screen_name + ' '
         end
     end
     Thread.new do
       @tweet_mutex.synchronize do
         sleep rand DELAY
         begin
-            response = @content.tweet_response(tweet, meta[:mentionless], MAX_TWEET_LENGTH - rp.size)
+            response = @content.tweet_response(tweet, meta.mentionless, MAX_TWEET_LENGTH - rp.size)
             if response.is_a?String
                 response = [response]
             end
@@ -437,9 +457,9 @@ class GenBot
             response = nil
         end
         if response == nil
-            @in_reply_queue[ tweet[:user][:screen_name].downcase ] = false
+            @in_reply_queue[ tweet.user.screen_name.downcase ] = false
             @bot.log "Content returned no response."
-            @bot.log "Remove @" + tweet[:user][:screen_name] + " from reply queue."
+            @bot.log "Remove @" + tweet.user.screen_name + " from reply queue."
             return
         end
         sensitive = response.delete(:sensitive_media)
@@ -447,10 +467,10 @@ class GenBot
         single = response.delete(:reply_to_single)
         if single == :reply_to_single
             # again :(
-            if tweet[:user][:screen_name] == TWITTER_USERNAME
+            if tweet.user.screen_name == TWITTER_USERNAME
                 rp = ''
             else
-                rp = '@' + tweet[:user][:screen_name] + ' '
+                rp = '@' + tweet.user.screen_name + ' '
             end        
         end
         text, img = response
@@ -469,7 +489,8 @@ class GenBot
                 if img != nil
                     made_tweet = tweet_with_media(text, img, sensitive, tweet.id )
                 else
-                    made_tweet = @bot.reply tweet, text
+                    #made_tweet = @bot.reply tweet, text
+                    made_tweet = twitter.update(text, {in_reply_to_status_id: tweet.id})
                 end
                 if made_tweet == nil
                     error_happened = true
@@ -482,8 +503,8 @@ class GenBot
             tries = tries + 1
         end
         
-        @bot.log "Remove @" + tweet[:user][:screen_name] + " from reply queue."
-        @in_reply_queue[ tweet[:user][:screen_name].downcase ] = false
+        @bot.log "Remove @" + tweet.user.screen_name + " from reply queue."
+        @in_reply_queue[ tweet.user.screen_name.downcase ] = false
         # one last sleep during the mutex to guarantee the next non-reply tweet
         # won't be immediate
         sleep rand DELAY
@@ -492,14 +513,14 @@ class GenBot
   end
 
   def favorite(tweet)
-    @bot.log "Favoriting @#{tweet[:user][:screen_name]}: #{tweet[:text]}"
+    @bot.log "Favoriting @#{tweet.user.screen_name}: #{tweet.text}"
     @bot.delay FAV_DELAY do
       @bot.twitter.favorite(tweet[:id])
     end
   end
 
   def retweet(tweet)
-    @bot.log "Retweeting @#{tweet[:user][:screen_name]}: #{tweet[:text]}"
+    @bot.log "Retweeting @#{tweet.user.screen_name}: #{tweet.text}"
     @bot.delay FAV_DELAY do
       @bot.twitter.retweet(tweet[:id])
     end
@@ -527,38 +548,16 @@ class GenBot
           @bot.log "Could not retrieve tweet: " + tweetId.to_s
           return
       end
-      # this is copied from the twitter:Ebooks code to make the meta object
-      # (there is no function in twitter:Ebooks that we can call to do this)
-      meta = {}
-      mentions = ev.attrs[:entities][:user_mentions].map { |x| x[:screen_name] }
-       
-      reply_mentions = mentions.reject { |m| m.downcase == TWITTER_USERNAME.downcase }
-      reply_mentions = [ev[:user][:screen_name]] + reply_mentions
-        
-      meta[:reply_prefix] = reply_mentions.uniq.map { |m| '@'+m }.join(' ') + ' '
-      meta[:limit] = 140 - meta[:reply_prefix].length
-        
-      mless = ev[:text]
-      begin
-          ev.attrs[:entities][:user_mentions].reverse.each do |entity|
-          last = mless[entity[:indices][1]..-1]||''
-          mless = mless[0...entity[:indices][0]] + last.strip
-      end
-      rescue Exception
-          p ev.attrs[:entities][:user_mentions]
-          p ev[:text]
-          raise
-      end
-      meta[:mentionless] = mless
       # now send to the queue.
-      reply_queue(ev, meta) 
+      reply_queue(ev, meta(ev) ) 
   end
+  
 end
 
-Ebooks::Bot.new(TWITTER_USERNAME) do |bot|
-  bot.oauth_token = OAUTH_TOKEN
-  bot.oauth_token_secret = OAUTH_TOKEN_SECRET
-  bot.consumer_key = CONSUMER_KEY
-  bot.consumer_secret = CONSUMER_SECRET
-  GenBot.new(bot)
+# Make a MyBot and attach it to an account
+GenBot.new(TWITTER_USERNAME) do |bot|
+  bot.access_token        = OAUTH_TOKEN        # Token connecting the app to this account
+  bot.access_token_secret = OAUTH_TOKEN_SECRET # Secret connecting the app to this account
+  bot.consumer_key        = CONSUMER_KEY
+  bot.consumer_secret     = CONSUMER_SECRET 
 end

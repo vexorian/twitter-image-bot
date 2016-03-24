@@ -5,7 +5,7 @@ A ruby twitter bot template.
 Actual documentation in the form of a tutorial coming soon, I hope.  In the meantime this repository should be of interest
 to people already knowledgeable about twitter bots.
 
-Required twitter_ebooks version is locked at 2.3.2, 3.0+ support will come soon (tm).
+Requires twitter_ebooks gem version 3.1.6.
 
 # Heroku scheduling
 Soon apps hosted for free in Heroku will be limited to run 18 hours a day. If a bot
